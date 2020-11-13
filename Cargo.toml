@@ -1,0 +1,15 @@
+[package]
+name = "fceux"
+version = "0.1.0"
+authors = ["taotao54321 <taotao54321@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+lazy_static = "1.4"
+thiserror = "1.0"
+
+libfceux-sys = { path = "libfceux-sys" }
+
+[dev-dependencies]
+eyre = "0.6"
+sdl2 = "0.34"
