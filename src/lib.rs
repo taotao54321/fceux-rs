@@ -1,5 +1,6 @@
 use std::ffi::CString;
 use std::marker::PhantomData;
+use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -69,11 +70,19 @@ impl<'a> Fceux<'a> {
     }
 
     pub fn snapshot_load(&self, snap: &Snapshot) -> Result<()> {
-        todo!();
+        let status = unsafe { libfceux_sys::fceux_snapshot_load(snap.snap) };
+        if status == 0 {
+            return Err(Error::new("fceux_snapshot_load() failed"));
+        }
+        Ok(())
     }
 
     pub fn snapshot_save(&self, snap: &Snapshot) -> Result<()> {
-        todo!();
+        let status = unsafe { libfceux_sys::fceux_snapshot_save(snap.snap) };
+        if status == 0 {
+            return Err(Error::new("fceux_snapshot_save() failed"));
+        }
+        Ok(())
     }
 
     pub fn video_get_palette(&self, idx: u8) -> (u8, u8, u8) {
@@ -84,6 +93,14 @@ impl<'a> Fceux<'a> {
             libfceux_sys::fceux_video_get_palette(idx, &mut r, &mut g, &mut b);
         }
         (r, g, b)
+    }
+
+    pub fn sound_set_freq(&self, freq: i32) -> Result<()> {
+        let status = unsafe { libfceux_sys::fceux_sound_set_freq(freq as c_int) };
+        if status == 0 {
+            return Err(Error::new("fceux_sound_set_freq() failed"));
+        }
+        Ok(())
     }
 }
 
