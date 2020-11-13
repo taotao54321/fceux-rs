@@ -1,0 +1,3 @@
+[submodule "libfceux-sys/libfceux"]
+	path = libfceux-sys/libfceux
+	url = git@github.com:taotao54321/libfceux.git
