@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::marker::PhantomData;
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_void};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -22,14 +22,20 @@ lazy_static! {
     static ref MUTEX: Mutex<()> = Mutex::new(());
 }
 
+unsafe extern "C" fn hook_before_exec(userdata: *mut c_void, addr: u16) {
+    let before_exec = userdata as *mut Box<dyn FnMut(u16)>;
+    (*before_exec)(addr);
+}
+
 /// libfceux の制限のため、同時に存在できるインスタンスは 1 つまで。
-#[derive(Debug)]
 pub struct Fceux<'a> {
     guard: MutexGuard<'a, ()>,
+
+    before_exec: Box<Box<dyn FnMut(u16)>>,
 }
 
 impl<'a> Fceux<'a> {
-    pub fn new(path_rom: impl AsRef<Path>) -> Result<Self> {
+    pub fn new(path_rom: impl AsRef<Path>, before_exec: Box<dyn FnMut(u16)>) -> Result<Self> {
         let guard = MUTEX
             .try_lock()
             .map_err(|_| Error::new("sorry, Fceux is singleton"))?;
@@ -48,7 +54,25 @@ impl<'a> Fceux<'a> {
             return Err(Error::new("fceux_init() failed"));
         }
 
-        Ok(Self { guard })
+        // トレイトオブジェクトは fat pointer なので、直接 raw pointer に変換することはできない。
+        // そこでもう 1 段 Box で包む。
+        // ref: https://users.rust-lang.org/t/sending-a-boxed-trait-over-ffi/21708
+        let before_exec = Box::new(before_exec);
+        let before_exec_raw = Box::into_raw(before_exec); // before_exec は自動解放されなくなる
+
+        unsafe {
+            libfceux_sys::fceux_hook_before_exec(
+                Some(hook_before_exec),
+                before_exec_raw as *mut c_void,
+            );
+        }
+
+        // 改めて self 内に before_exec を Box として保持する。
+        // これにより before_exec が自動解放されるようになる。
+        Ok(Self {
+            guard,
+            before_exec: unsafe { Box::from_raw(before_exec_raw) },
+        })
     }
 
     pub fn run_frame<F: FnOnce(&[u8], &[i32])>(&self, joy1: u8, joy2: u8, f: F) {
@@ -107,6 +131,7 @@ impl<'a> Fceux<'a> {
 impl<'a> Drop for Fceux<'a> {
     fn drop(&mut self) {
         unsafe {
+            libfceux_sys::fceux_hook_before_exec(None, std::ptr::null_mut());
             libfceux_sys::fceux_quit();
         }
     }

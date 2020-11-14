@@ -70,7 +70,7 @@ fn main() -> eyre::Result<()> {
             .map_err(|s| eyre!(s))
     }?;
 
-    let fceux = Fceux::new(path_rom)?;
+    let fceux = Fceux::new(path_rom, Box::new(|addr| eprintln!("{}", addr)))?;
     fceux.sound_set_freq(AUDIO_FREQ)?;
 
     audio.resume();
