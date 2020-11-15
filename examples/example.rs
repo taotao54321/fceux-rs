@@ -6,7 +6,7 @@ use sdl2::audio::AudioSpecDesired;
 use sdl2::event::Event;
 use sdl2::pixels::PixelFormatEnum;
 
-use fceux::Fceux;
+use fceux::MemoryDomain;
 
 const AUDIO_FREQ: i32 = 44100;
 
@@ -70,8 +70,21 @@ fn main() -> eyre::Result<()> {
             .map_err(|s| eyre!(s))
     }?;
 
-    let fceux = Fceux::new(path_rom, Box::new(|addr| eprintln!("{}", addr)))?;
-    fceux.sound_set_freq(AUDIO_FREQ)?;
+    fceux::init(path_rom)?;
+    fceux::sound_set_freq(AUDIO_FREQ)?;
+
+    struct MyHook;
+    impl fceux::Hook for MyHook {
+        fn before_exec(&mut self, addr: u16) {
+            let addr_nmi = fceux::mem_read(0xFFFA, MemoryDomain::Cpu) as u16
+                | ((fceux::mem_read(0xFFFB, MemoryDomain::Cpu) as u16) << 8);
+            if addr == addr_nmi {
+                eprintln!("NMI: {:04X}", addr);
+            }
+        }
+    }
+
+    fceux::hook_set(Box::new(MyHook));
 
     audio.resume();
     let mut timer = Timer::new(60);
@@ -84,7 +97,7 @@ fn main() -> eyre::Result<()> {
         }
 
         tex.with_lock(None, |buf, pitch| {
-            fceux.run_frame(0, 0, |xbuf, soundbuf| {
+            fceux::run_frame(0, 0, |xbuf, soundbuf| {
                 // FCEUX はサウンドバッファが 32bit 単位なので変換が必要。
                 // サンプル単位で処理しているので若干遅そうだが、手元では問題なく鳴っている。
                 // ちゃんとやるなら [i16; 1024] 程度のバッファを用意して変換すべきか。
@@ -97,7 +110,7 @@ fn main() -> eyre::Result<()> {
 
                 for y in 0..240 {
                     for x in 0..256 {
-                        let (r, g, b) = fceux.video_get_palette(xbuf[256 * y + x]);
+                        let (r, g, b) = fceux::video_get_palette(xbuf[256 * y + x]);
                         buf[pitch * y + 4 * x] = 0x00;
                         buf[pitch * y + 4 * x + 1] = b;
                         buf[pitch * y + 4 * x + 2] = g;

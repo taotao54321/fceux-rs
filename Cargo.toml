@@ -5,7 +5,6 @@ authors = ["taotao54321 <taotao54321@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-lazy_static = "1.4"
 thiserror = "1.0"
 
 libfceux-sys = { path = "libfceux-sys" }
