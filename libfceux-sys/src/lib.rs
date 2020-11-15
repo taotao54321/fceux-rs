@@ -13,6 +13,10 @@ pub type FceuxHookBeforeExec = Option<unsafe extern "C" fn(userdata: *mut c_void
 
 extern "C" {
     pub fn fceux_init(path_rom: *const c_char) -> c_int;
+    pub fn fceux_was_init() -> c_int;
+
+    pub fn fceux_power();
+    pub fn fceux_reset();
 
     pub fn fceux_run_frame(
         joy1: u8,
