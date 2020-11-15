@@ -21,16 +21,13 @@ pub trait Hook {
     fn before_exec(&mut self, _addr: u16) {}
 }
 
-#[derive(Debug)]
-struct HookNop;
-
-impl Hook for HookNop {}
-
 static mut INITIALIZED: bool = false;
 static mut HOOK: Option<Box<dyn Hook>> = None;
 
 unsafe extern "C" fn ffi_hook_before_exec(_: *mut c_void, addr: u16) {
-    HOOK.as_mut().unwrap().before_exec(addr);
+    if let Some(hook) = HOOK.as_mut() {
+        hook.before_exec(addr);
+    }
 }
 
 /// 初期化処理。
@@ -59,7 +56,6 @@ pub fn init(path_rom: impl AsRef<Path>) -> Result<()> {
             return Err(Error::new("fceux_init() failed"));
         }
 
-        HOOK = Some(Box::new(HookNop));
         libfceux_sys::fceux_hook_before_exec(Some(ffi_hook_before_exec), std::ptr::null_mut());
 
         INITIALIZED = true;
@@ -113,9 +109,9 @@ pub fn snapshot_save(snap: &Snapshot) -> Result<()> {
     Ok(())
 }
 
-pub fn hook_set(hook: Box<dyn Hook>) {
+pub fn hook_set(hook: Option<Box<dyn Hook>>) {
     unsafe {
-        HOOK = Some(hook);
+        HOOK = hook;
     }
 }
 
