@@ -2,11 +2,15 @@ use std::time::{Duration, Instant};
 
 use eyre::eyre;
 
-use sdl2::audio::AudioSpecDesired;
+use sdl2::audio::{AudioQueue, AudioSpecDesired};
 use sdl2::event::Event;
+use sdl2::keyboard::{KeyboardState, Keycode, Scancode};
 use sdl2::pixels::PixelFormatEnum;
+use sdl2::render::{Canvas, Texture};
+use sdl2::video::Window;
+use sdl2::EventPump;
 
-use fceux::MemoryDomain;
+use fceux::{MemoryDomain, Snapshot};
 
 const AUDIO_FREQ: i32 = 44100;
 
@@ -35,6 +39,173 @@ impl Timer {
             self.nxt = now + self.frame_dur;
         }
     }
+}
+
+#[derive(Debug)]
+struct MyHook;
+
+impl fceux::Hook for MyHook {
+    fn before_exec(&mut self, addr: u16) {
+        let addr_nmi = fceux::mem_read(0xFFFA, MemoryDomain::Cpu) as u16
+            | ((fceux::mem_read(0xFFFB, MemoryDomain::Cpu) as u16) << 8);
+        if addr == addr_nmi {
+            eprintln!("NMI: {:04X}", addr);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cmd {
+    Quit,
+    Load,
+    Save,
+    Hook,
+    Emulate(u8),
+}
+
+fn event(event_pump: &mut EventPump) -> Cmd {
+    for ev in event_pump.poll_iter() {
+        match ev {
+            Event::Quit { .. } => return Cmd::Quit,
+            Event::KeyDown {
+                keycode: Some(key), ..
+            } => match key {
+                Keycode::Q => return Cmd::Quit,
+                Keycode::L => return Cmd::Load,
+                Keycode::S => return Cmd::Save,
+                Keycode::H => return Cmd::Hook,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    event_pump.pump_events();
+    let keys = KeyboardState::new(event_pump);
+
+    let mut joy = 0;
+    let mut joykey = |scancode: Scancode, bit: i32| {
+        if keys.is_scancode_pressed(scancode) {
+            joy |= 1 << bit;
+        }
+    };
+
+    joykey(Scancode::Z, 0);
+    joykey(Scancode::X, 1);
+    joykey(Scancode::V, 2);
+    joykey(Scancode::C, 3);
+    joykey(Scancode::Up, 4);
+    joykey(Scancode::Down, 5);
+    joykey(Scancode::Left, 6);
+    joykey(Scancode::Right, 7);
+
+    Cmd::Emulate(joy)
+}
+
+fn cmd_load(snap: &Snapshot) {
+    match fceux::snapshot_load(snap) {
+        Ok(_) => eprintln!("loaded snapshot"),
+        Err(_) => eprintln!("cannot load snapshot"),
+    }
+}
+
+fn cmd_save(snap: &Snapshot) {
+    match fceux::snapshot_save(snap) {
+        Ok(_) => eprintln!("saved snapshot"),
+        Err(_) => eprintln!("cannot save snapshot"),
+    }
+}
+
+fn cmd_hook(hook_flag: &mut bool) {
+    *hook_flag = !*hook_flag;
+
+    if *hook_flag {
+        fceux::hook_set(Some(Box::new(MyHook)));
+    } else {
+        fceux::hook_set(None);
+    }
+}
+
+fn cmd_emulate(
+    canvas: &mut Canvas<Window>,
+    tex: &mut Texture,
+    audio: &AudioQueue<i16>,
+    joy: u8,
+) -> eyre::Result<()> {
+    tex.with_lock(None, |buf, pitch| {
+        fceux::run_frame(joy, 0, |xbuf, soundbuf| {
+            // FCEUX はサウンドバッファが 32bit 単位なので変換が必要。
+            // サンプル単位で処理しているので若干遅そうだが、手元では問題なく鳴っている。
+            // ちゃんとやるなら [i16; 1024] 程度のバッファを用意して変換すべきか。
+            //
+            // なお、AudioQueue::queue() は内部で SDL_QueueAudio() を呼んでいる。
+            // この関数は実装当初は音がおかしかったが、現在は問題ない模様。
+            for sample in soundbuf {
+                audio.queue(&[*sample as i16]);
+            }
+
+            for y in 0..240 {
+                for x in 0..256 {
+                    let (r, g, b) = fceux::video_get_palette(xbuf[256 * y + x]);
+                    buf[pitch * y + 4 * x] = 0x00;
+                    buf[pitch * y + 4 * x + 1] = b;
+                    buf[pitch * y + 4 * x + 2] = g;
+                    buf[pitch * y + 4 * x + 3] = r;
+                }
+            }
+        });
+    })
+    .map_err(|s| eyre!(s))?;
+
+    canvas.copy(&tex, None, None).map_err(|s| eyre!(s))?;
+    canvas.present();
+
+    Ok(())
+}
+
+fn mainloop(
+    event_pump: &mut EventPump,
+    canvas: &mut Canvas<Window>,
+    tex: &mut Texture,
+    audio: &AudioQueue<i16>,
+) -> eyre::Result<()> {
+    let snap = fceux::snapshot_create();
+    let mut hook_flag = false;
+
+    audio.resume();
+    let mut timer = Timer::new(60);
+    loop {
+        let cmd = event(event_pump);
+        match cmd {
+            Cmd::Quit => break,
+            Cmd::Load => cmd_load(&snap),
+            Cmd::Save => cmd_save(&snap),
+            Cmd::Hook => cmd_hook(&mut hook_flag),
+            Cmd::Emulate(joy) => cmd_emulate(canvas, tex, &audio, joy)?,
+        }
+
+        timer.delay();
+    }
+
+    Ok(())
+}
+
+fn print_instruction() {
+    eprintln!(
+        "\
+Instruction
+-----------
+Arrow-keys      D-pad
+z               A
+x               B
+c               Start
+v               Select
+l               Load state
+s               Save state
+h               Toggle hook
+q               Quit
+"
+    );
 }
 
 fn usage() -> ! {
@@ -73,59 +244,7 @@ fn main() -> eyre::Result<()> {
     fceux::init(path_rom)?;
     fceux::sound_set_freq(AUDIO_FREQ)?;
 
-    struct MyHook;
-    impl fceux::Hook for MyHook {
-        fn before_exec(&mut self, addr: u16) {
-            let addr_nmi = fceux::mem_read(0xFFFA, MemoryDomain::Cpu) as u16
-                | ((fceux::mem_read(0xFFFB, MemoryDomain::Cpu) as u16) << 8);
-            if addr == addr_nmi {
-                eprintln!("NMI: {:04X}", addr);
-            }
-        }
-    }
+    print_instruction();
 
-    fceux::hook_set(Box::new(MyHook));
-
-    audio.resume();
-    let mut timer = Timer::new(60);
-    'mainloop: loop {
-        for ev in event_pump.poll_iter() {
-            match ev {
-                Event::Quit { .. } => break 'mainloop,
-                _ => {}
-            }
-        }
-
-        tex.with_lock(None, |buf, pitch| {
-            fceux::run_frame(0, 0, |xbuf, soundbuf| {
-                // FCEUX はサウンドバッファが 32bit 単位なので変換が必要。
-                // サンプル単位で処理しているので若干遅そうだが、手元では問題なく鳴っている。
-                // ちゃんとやるなら [i16; 1024] 程度のバッファを用意して変換すべきか。
-                //
-                // なお、AudioQueue::queue() は内部で SDL_QueueAudio() を呼んでいる。
-                // この関数は実装当初は音がおかしかったが、現在は問題ない模様。
-                for sample in soundbuf {
-                    audio.queue(&[*sample as i16]);
-                }
-
-                for y in 0..240 {
-                    for x in 0..256 {
-                        let (r, g, b) = fceux::video_get_palette(xbuf[256 * y + x]);
-                        buf[pitch * y + 4 * x] = 0x00;
-                        buf[pitch * y + 4 * x + 1] = b;
-                        buf[pitch * y + 4 * x + 2] = g;
-                        buf[pitch * y + 4 * x + 3] = r;
-                    }
-                }
-            });
-        })
-        .map_err(|s| eyre!(s))?;
-
-        canvas.copy(&tex, None, None).map_err(|s| eyre!(s))?;
-        canvas.present();
-
-        timer.delay();
-    }
-
-    Ok(())
+    mainloop(&mut event_pump, &mut canvas, &mut tex, &audio)
 }
