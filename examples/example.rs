@@ -60,6 +60,8 @@ enum Cmd {
     Load,
     Save,
     Hook,
+    Power,
+    Reset,
     Emulate(u8),
 }
 
@@ -74,6 +76,8 @@ fn event(event_pump: &mut EventPump) -> Cmd {
                 Keycode::L => return Cmd::Load,
                 Keycode::S => return Cmd::Save,
                 Keycode::H => return Cmd::Hook,
+                Keycode::P => return Cmd::Power,
+                Keycode::R => return Cmd::Reset,
                 _ => {}
             },
             _ => {}
@@ -124,6 +128,16 @@ fn cmd_hook(hook_flag: &mut bool) {
     } else {
         fceux::hook_set(None);
     }
+}
+
+fn cmd_power() {
+    fceux::power();
+    eprintln!("power");
+}
+
+fn cmd_reset() {
+    fceux::reset();
+    eprintln!("reset");
 }
 
 fn cmd_emulate(
@@ -181,6 +195,8 @@ fn mainloop(
             Cmd::Load => cmd_load(&snap),
             Cmd::Save => cmd_save(&snap),
             Cmd::Hook => cmd_hook(&mut hook_flag),
+            Cmd::Power => cmd_power(),
+            Cmd::Reset => cmd_reset(),
             Cmd::Emulate(joy) => cmd_emulate(canvas, tex, audio, joy)?,
         }
 
@@ -203,6 +219,8 @@ v               Select
 l               Load state
 s               Save state
 h               Toggle hook
+p               Power
+r               Reset
 q               Quit
 "
     );
@@ -241,7 +259,10 @@ fn main() -> eyre::Result<()> {
             .map_err(|s| eyre!(s))
     }?;
 
+    assert!(!fceux::was_init());
     fceux::init(path_rom)?;
+    assert!(fceux::was_init());
+
     fceux::sound_set_freq(AUDIO_FREQ)?;
 
     print_instruction();

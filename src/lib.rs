@@ -64,6 +64,22 @@ pub fn init(path_rom: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+pub fn was_init() -> bool {
+    unsafe { INITIALIZED }
+}
+
+pub fn power() {
+    unsafe {
+        libfceux_sys::fceux_power();
+    }
+}
+
+pub fn reset() {
+    unsafe {
+        libfceux_sys::fceux_reset();
+    }
+}
+
 /// フレーム境界以外から呼び出した場合の結果は未定義。
 pub fn run_frame<F: FnOnce(&[u8], &[i32])>(joy1: u8, joy2: u8, f: F) {
     let mut xbuf: *mut u8 = std::ptr::null_mut();
