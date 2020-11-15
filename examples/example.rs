@@ -181,7 +181,7 @@ fn mainloop(
             Cmd::Load => cmd_load(&snap),
             Cmd::Save => cmd_save(&snap),
             Cmd::Hook => cmd_hook(&mut hook_flag),
-            Cmd::Emulate(joy) => cmd_emulate(canvas, tex, &audio, joy)?,
+            Cmd::Emulate(joy) => cmd_emulate(canvas, tex, audio, joy)?,
         }
 
         timer.delay();
