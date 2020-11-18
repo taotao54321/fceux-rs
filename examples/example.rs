@@ -41,25 +41,11 @@ impl Timer {
     }
 }
 
-#[derive(Debug)]
-struct MyHook;
-
-impl fceux::Hook for MyHook {
-    fn before_exec(&mut self, addr: u16) {
-        let addr_nmi = fceux::mem_read(0xFFFA, MemoryDomain::Cpu) as u16
-            | ((fceux::mem_read(0xFFFB, MemoryDomain::Cpu) as u16) << 8);
-        if addr == addr_nmi {
-            eprintln!("NMI: {:04X}", addr);
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cmd {
     Quit,
     Load,
     Save,
-    Hook,
     Power,
     Reset,
     Emulate(u8),
@@ -75,7 +61,6 @@ fn event(event_pump: &mut EventPump) -> Cmd {
                 Keycode::Q => return Cmd::Quit,
                 Keycode::L => return Cmd::Load,
                 Keycode::S => return Cmd::Save,
-                Keycode::H => return Cmd::Hook,
                 Keycode::P => return Cmd::Power,
                 Keycode::R => return Cmd::Reset,
                 _ => {}
@@ -120,16 +105,6 @@ fn cmd_save(snap: &Snapshot) {
     }
 }
 
-fn cmd_hook(hook_flag: &mut bool) {
-    *hook_flag = !*hook_flag;
-
-    if *hook_flag {
-        fceux::hook_set(Some(Box::new(MyHook)));
-    } else {
-        fceux::hook_set(None);
-    }
-}
-
 fn cmd_power() {
     fceux::power();
     eprintln!("power");
@@ -146,33 +121,53 @@ fn cmd_emulate(
     audio: &AudioQueue<i16>,
     joy: u8,
 ) -> eyre::Result<()> {
-    tex.with_lock(None, |buf, pitch| {
-        fceux::run_frame(joy, 0, |xbuf, soundbuf| {
-            // FCEUX はサウンドバッファが 32bit 単位なので変換が必要。
-            // サンプル単位で処理しているので若干遅そうだが、手元では問題なく鳴っている。
-            // ちゃんとやるなら [i16; 1024] 程度のバッファを用意して変換すべきか。
-            //
-            // なお、AudioQueue::queue() は内部で SDL_QueueAudio() を呼んでいる。
-            // この関数は実装当初は音がおかしかったが、現在は問題ない模様。
-            for sample in soundbuf {
-                audio.queue(&[*sample as i16]);
-            }
+    let mut nmi_called = false;
+    let f_hook = |addr: u16| {
+        let addr_nmi = fceux::mem_read(0xFFFA, MemoryDomain::Cpu) as u16
+            | ((fceux::mem_read(0xFFFB, MemoryDomain::Cpu) as u16) << 8);
+        if addr == addr_nmi {
+            nmi_called = true;
+        }
+    };
 
-            for y in 0..240 {
-                for x in 0..256 {
-                    let (r, g, b) = fceux::video_get_palette(xbuf[256 * y + x]);
-                    buf[pitch * y + 4 * x] = 0x00;
-                    buf[pitch * y + 4 * x + 1] = b;
-                    buf[pitch * y + 4 * x + 2] = g;
-                    buf[pitch * y + 4 * x + 3] = r;
+    tex.with_lock(None, |buf, pitch| {
+        fceux::run_frame(
+            joy,
+            0,
+            |xbuf, soundbuf| {
+                // FCEUX はサウンドバッファが 32bit 単位なので変換が必要。
+                // サンプル単位で処理しているので若干遅そうだが、手元では問題なく鳴っている。
+                // ちゃんとやるなら [i16; 1024] 程度のバッファを用意して変換すべきか。
+                //
+                // なお、AudioQueue::queue() は内部で SDL_QueueAudio() を呼んでいる。
+                // この関数は実装当初は音がおかしかったが、現在は問題ない模様。
+                for sample in soundbuf {
+                    audio.queue(&[*sample as i16]);
                 }
-            }
-        });
+
+                for y in 0..240 {
+                    for x in 0..256 {
+                        let (r, g, b) = fceux::video_get_palette(xbuf[256 * y + x]);
+                        buf[pitch * y + 4 * x] = 0x00;
+                        buf[pitch * y + 4 * x + 1] = b;
+                        buf[pitch * y + 4 * x + 2] = g;
+                        buf[pitch * y + 4 * x + 3] = r;
+                    }
+                }
+            },
+            &f_hook,
+        );
     })
     .map_err(|s| eyre!(s))?;
 
     canvas.copy(&tex, None, None).map_err(|s| eyre!(s))?;
     canvas.present();
+
+    /*
+    if nmi_called {
+        eprintln!("NMI");
+    }
+    */
 
     Ok(())
 }
@@ -184,7 +179,6 @@ fn mainloop(
     audio: &AudioQueue<i16>,
 ) -> eyre::Result<()> {
     let snap = fceux::snapshot_create();
-    let mut hook_flag = false;
 
     audio.resume();
     let mut timer = Timer::new(60);
@@ -194,7 +188,6 @@ fn mainloop(
             Cmd::Quit => break,
             Cmd::Load => cmd_load(&snap),
             Cmd::Save => cmd_save(&snap),
-            Cmd::Hook => cmd_hook(&mut hook_flag),
             Cmd::Power => cmd_power(),
             Cmd::Reset => cmd_reset(),
             Cmd::Emulate(joy) => cmd_emulate(canvas, tex, audio, joy)?,
@@ -218,7 +211,6 @@ c               Start
 v               Select
 l               Load state
 s               Save state
-h               Toggle hook
 p               Power
 r               Reset
 q               Quit

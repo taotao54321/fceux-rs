@@ -1,6 +1,7 @@
 //! libfceux は元々単一インスタンスしかサポートしていないので、シングルスレッドでしか使えない。
 //! よってスレッド安全性は考慮していない。
 
+use std::cell::UnsafeCell;
 use std::ffi::CString;
 use std::os::raw::{c_int, c_uint, c_void};
 use std::path::Path;
@@ -17,17 +18,37 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub trait Hook {
-    fn before_exec(&mut self, _addr: u16) {}
+fn hook_dummy(_addr: u16) {}
+
+struct Hook {
+    f: UnsafeCell<*const dyn FnMut(u16)>,
 }
 
+impl Hook {
+    fn replace(&self, f: &dyn FnMut(u16)) {
+        unsafe {
+            let f: &'static dyn FnMut(u16) = std::mem::transmute(f);
+            *self.f.get() = f;
+        }
+    }
+
+    fn call(&self, addr: u16) {
+        unsafe {
+            let f: &mut dyn FnMut(u16) = &mut *(*self.f.get() as *mut dyn FnMut(u16));
+            f(addr);
+        }
+    }
+}
+
+unsafe impl Sync for Hook {}
+
 static mut INITIALIZED: bool = false;
-static mut HOOK: Option<Box<dyn Hook>> = None;
+static HOOK: Hook = Hook {
+    f: UnsafeCell::new(&hook_dummy),
+};
 
 unsafe extern "C" fn ffi_hook_before_exec(_: *mut c_void, addr: u16) {
-    if let Some(hook) = HOOK.as_mut() {
-        hook.before_exec(addr);
-    }
+    HOOK.call(addr);
 }
 
 /// 初期化処理。
@@ -81,7 +102,16 @@ pub fn reset() {
 }
 
 /// フレーム境界以外から呼び出した場合の結果は未定義。
-pub fn run_frame<F: FnOnce(&[u8], &[i32])>(joy1: u8, joy2: u8, f: F) {
+pub fn run_frame<VideoSoundF>(
+    joy1: u8,
+    joy2: u8,
+    f_video_sound: VideoSoundF,
+    f_hook: &dyn FnMut(u16),
+) where
+    VideoSoundF: FnOnce(&[u8], &[i32]),
+{
+    HOOK.replace(f_hook);
+
     let mut xbuf: *mut u8 = std::ptr::null_mut();
     let mut soundbuf: *mut i32 = std::ptr::null_mut();
     let mut soundbuf_size: i32 = 0;
@@ -92,7 +122,9 @@ pub fn run_frame<F: FnOnce(&[u8], &[i32])>(joy1: u8, joy2: u8, f: F) {
             std::slice::from_raw_parts(soundbuf, soundbuf_size as usize),
         )
     };
-    f(xbuf, soundbuf);
+    f_video_sound(xbuf, soundbuf);
+
+    HOOK.replace(&hook_dummy);
 }
 
 pub fn mem_read(addr: u16, domain: MemoryDomain) -> u8 {
@@ -123,12 +155,6 @@ pub fn snapshot_save(snap: &Snapshot) -> Result<()> {
         return Err(Error::new("fceux_snapshot_save() failed"));
     }
     Ok(())
-}
-
-pub fn hook_set(hook: Option<Box<dyn Hook>>) {
-    unsafe {
-        HOOK = hook;
-    }
 }
 
 pub fn video_get_palette(idx: u8) -> (u8, u8, u8) {
