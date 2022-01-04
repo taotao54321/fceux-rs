@@ -26,6 +26,8 @@ extern "C" {
         soundbuf_size: *mut i32,
     );
 
+    pub fn fceux_reg_p() -> u8;
+
     pub fn fceux_mem_read(addr: u16, domain: FceuxMemoryDomain) -> u8;
     pub fn fceux_mem_write(addr: u16, value: u8, domain: FceuxMemoryDomain);
 

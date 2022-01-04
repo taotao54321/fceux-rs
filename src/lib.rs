@@ -18,6 +18,32 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// P レジスタ。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct RegP(u8);
+
+impl RegP {
+    /// キャリーフラグを返す。
+    pub fn carry(self) -> bool {
+        (self.0 & (1 << 0)) != 0
+    }
+
+    /// ゼロフラグを返す。
+    pub fn zero(self) -> bool {
+        (self.0 & (1 << 1)) != 0
+    }
+
+    /// オーバーフローフラグを返す。
+    pub fn overflow(self) -> bool {
+        (self.0 & (1 << 6)) != 0
+    }
+
+    /// ネガティブフラグを返す。
+    pub fn negative(self) -> bool {
+        (self.0 & (1 << 7)) != 0
+    }
+}
+
 fn hook_dummy(_addr: u16) {}
 
 struct Hook {
@@ -125,6 +151,12 @@ pub fn run_frame<VideoSoundF>(
     f_video_sound(xbuf, soundbuf);
 
     HOOK.replace(&hook_dummy);
+}
+
+/// P レジスタを読み取る。
+pub fn reg_p() -> RegP {
+    let inner = unsafe { libfceux_sys::fceux_reg_p() };
+    RegP(inner)
 }
 
 pub fn mem_read(addr: u16, domain: MemoryDomain) -> u8 {
